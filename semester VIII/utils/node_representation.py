@@ -2,8 +2,7 @@ from typing import Dict, List
 
 import torch
 import torch_geometric.nn as gnn
-from torch_geometric import EdgeType, NodeType
-from torch_geometric.typing import EdgeType
+from torch_geometric.typing import EdgeType, NodeType
 
 from tqdm import tqdm
 
@@ -35,7 +34,7 @@ class Metapath2Vec:
         self.loader = self.mp2v.loader(batch_size=batch_size, shuffle=shuffle)
         self.optimizer = torch.optim.SparseAdam(list(self.mp2v.parameters()), lr=learning_rate)
 
-    def __train_epoch__(self):
+    def __train_epoch__(self) -> float:
         self.mp2v.train()
         for pos_rw, neg_rw in tqdm(self.loader):
             self.optimizer.zero_grad()
@@ -51,5 +50,5 @@ class Metapath2Vec:
             if verbose:
                 print((f'Epoch: {epoch}, Loss: {loss :.4f}'))
 
-    def get_embeddings(self, node_type: str):
+    def get_embeddings(self, node_type: str) -> torch.Tensor:
         return self.mp2v.forward(node_type).detach()

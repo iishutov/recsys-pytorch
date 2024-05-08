@@ -1,8 +1,10 @@
-from torch_geometric.typing import EdgeType, Metadata, NodeType
+from typing import Dict
 
 import torch
 import torch_geometric.nn as gnn
 import torch.nn.functional as F
+from torch_geometric.typing import Metadata
+from torch_geometric.typing import EdgeType, NodeType
 
 class GNNSAGE(torch.nn.Module):
     def __init__(self, channels: int, dropout_p: float = None):
@@ -11,16 +13,24 @@ class GNNSAGE(torch.nn.Module):
         self.dropout_p = dropout_p
         self.conv2 = gnn.SAGEConv((-1, -1), channels)
 
-    def forward(self, x_dict, edge_index):
-        h_dict = self.conv1(x_dict, edge_index).relu()
+    def forward(self,
+                x_dict: Dict[NodeType, torch.Tensor],
+                edge_index_dict: Dict[EdgeType, torch.Tensor]) \
+                    -> Dict[NodeType, torch.Tensor]:
+        
+        h_dict = self.conv1(x_dict, edge_index_dict).relu()
         if self.dropout_p is not None:
             h_dict = F.dropout(h_dict, self.dropout_p, self.training)
-        h_dict = self.conv2(h_dict, edge_index)
+        h_dict = self.conv2(h_dict, edge_index_dict)
         
         return h_dict
 
 class IPDecoder(torch.nn.Module):
-    def forward(self, x_dict, edge_label_index):
+    def forward(self,
+                x_dict: Dict[NodeType, torch.Tensor],
+                edge_label_index: torch.Tensor) \
+                    -> torch.Tensor:
+        
         users_edges, movies_edges = edge_label_index
         x_users = x_dict['user'][users_edges]
         x_movies = x_dict['movie'][movies_edges]
@@ -34,7 +44,11 @@ class MLPDecoder(torch.nn.Module):
         self.dropout_p = dropout_p
         self.lin2 = torch.nn.Linear(channels, 1)
 
-    def forward(self, x_dict, edge_label_index):
+    def forward(self,
+                x_dict: Dict[NodeType, torch.Tensor],
+                edge_label_index: torch.Tensor) \
+                    -> torch.Tensor:
+        
         users_edges, movies_edges = edge_label_index
         x = torch.cat([x_dict['user'][users_edges], x_dict['movie'][movies_edges]], dim=1)
 
@@ -55,15 +69,21 @@ class GNN(torch.nn.Module):
             'NN' - 2-layer neural network.
         '''
         if decoder not in {'IP', 'NN'}:
-            raise Exception("Decoder is '{decoder}', which is not a possible option ('IP', 'NN').")
+            raise Exception("Decoder is '{decoder}', "
+                            "which is not a possible option ('IP', 'NN').")
 
         super().__init__()
-        self.encoder = GNNSAGE(hidden_channels, dropout_p=dropout_encoder_p)
+        self.encoder = GNNSAGE(hidden_channels, dropout_encoder_p)
         self.encoder = gnn.to_hetero(self.encoder, metadata, aggr='sum')
         self.decoder = \
             IPDecoder() if decoder == 'IP' else \
             MLPDecoder(hidden_channels, dropout_nndecoder_p)
 
-    def forward(self, x_dict, edge_index_dict, edge_label_index):
+    def forward(self,
+                x_dict: Dict[NodeType, torch.Tensor],
+                edge_index_dict: Dict[EdgeType, torch.Tensor],
+                edge_label_index: torch.Tensor) \
+                    -> torch.Tensor:
+        
         h_dict = self.encoder(x_dict, edge_index_dict)
         return self.decoder(h_dict, edge_label_index)
