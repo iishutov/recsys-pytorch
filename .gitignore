@@ -1,4 +1,6 @@
 __pycache__
 
 overview/data/
-semester VIII/mod_data/
+semester VIII/data/
+semester VIII/processed_data/
+semester VIII/encoded_data.npz

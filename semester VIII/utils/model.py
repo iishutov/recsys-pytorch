@@ -10,8 +10,9 @@ class GNNSAGE(torch.nn.Module):
     def __init__(self, channels: int, dropout_p: float = None):
         super().__init__()
         self.conv1 = gnn.SAGEConv((-1, -1), channels)
-        self.dropout_p = dropout_p
         self.conv2 = gnn.SAGEConv((-1, -1), channels)
+        self.conv3 = gnn.SAGEConv((-1, -1), channels)
+        self.dropout_p = dropout_p
 
     def forward(self,
                 x_dict: Dict[NodeType, torch.Tensor],
@@ -21,7 +22,12 @@ class GNNSAGE(torch.nn.Module):
         h_dict = self.conv1(x_dict, edge_index_dict).relu()
         if self.dropout_p is not None:
             h_dict = F.dropout(h_dict, self.dropout_p, self.training)
-        h_dict = self.conv2(h_dict, edge_index_dict)
+
+        h_dict = self.conv2(h_dict, edge_index_dict).relu()
+        if self.dropout_p is not None:
+            h_dict = F.dropout(h_dict, self.dropout_p, self.training)
+
+        h_dict = self.conv3(h_dict, edge_index_dict)
         
         return h_dict
 
@@ -31,9 +37,9 @@ class IPDecoder(torch.nn.Module):
                 edge_label_index: torch.Tensor) \
                     -> torch.Tensor:
         
-        users_edges, movies_edges = edge_label_index
-        x_users = x_dict['user'][users_edges]
-        x_movies = x_dict['movie'][movies_edges]
+        users_idx, movies_idx = edge_label_index
+        x_users = x_dict['user'][users_idx]
+        x_movies = x_dict['movie'][movies_idx]
 
         return (x_users * x_movies).sum(dim=-1)
 
