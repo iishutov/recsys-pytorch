@@ -12,18 +12,12 @@ class GNNSAGE(torch.nn.Module):
         super().__init__()
         self.dropout_p = dropout_p
         self.convs = torch.nn.ModuleList()
-
-        conv1 = gnn.HeteroConv({
-            ('user', 'watched', 'movie'): gnn.SAGEConv((-1, -1), channels),
-            ('movie', 'rev_watched', 'user'): gnn.SAGEConv((-1, -1), channels),
-            }, aggr='sum')
-        self.convs.append(conv1)
-
-        for _ in range(num_layers-1):
-            sage_conv = gnn.SAGEConv((-1, -1), channels)
+        for _ in range(num_layers):
             conv = gnn.HeteroConv({
-                ('user', 'watched', 'movie'): sage_conv,
-                ('movie', 'rev_watched', 'user'): sage_conv,
+                ('user', 'watched', 'movie'):
+                    gnn.SAGEConv((-1, -1), channels),
+                ('movie', 'rev_watched', 'user'):
+                    gnn.SAGEConv((-1, -1), channels),
             }, aggr='sum')
             self.convs.append(conv)
 
@@ -34,9 +28,12 @@ class GNNSAGE(torch.nn.Module):
         
         for i, conv in enumerate(self.convs):
             x_dict = conv(x_dict, edge_index_dict)
-            x_dict = {node_type: F.leaky_relu(x) for node_type, x in x_dict.items()}
-            if (self.dropout_p is not None) and (i != len(self.convs)):
-                x_dict = F.dropout(x_dict, self.dropout_p, self.training)
+            if i != len(self.convs):
+                x_dict = {node_type: F.leaky_relu(x)
+                          for node_type, x in x_dict.items()}
+                if self.dropout_p is not None:
+                    x_dict = {node_type: F.dropout(x, self.dropout_p, self.training)
+                              for node_type, x in x_dict.items()}
         
         return x_dict
 
@@ -128,7 +125,8 @@ class GNN(torch.nn.Module):
             if top_count is not None:
                 users_edges = users_edges[:, users_edges[1] < top_count]
 
-            user_mapping = {input_id: idx for idx, input_id in enumerate(batch_users_idx.tolist())}
+            user_mapping = {input_id: idx for idx, input_id in
+                            enumerate(batch_users_idx.tolist())}
             users_edges[0, :].apply_(user_mapping.get)
 
             batch_recs = mipsknn.search(user_embs, k, exclude_links=users_edges)[1]
