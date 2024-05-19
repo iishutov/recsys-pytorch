@@ -7,9 +7,9 @@ from torch_geometric import EdgeIndex
 def data_to_heterograph(data_path: str) -> HeteroData:
     from torch_geometric.transforms import ToUndirected
 
-    df_inter = pd.read_csv('./processed_data/interactions.csv')
-    df_items = pd.read_csv('./processed_data/items.csv')
-    df_users = pd.read_csv('./processed_data/users.csv')
+    df_inter = pd.read_csv('./data/processed/interactions.csv')
+    df_items = pd.read_csv('./data/processed/items.csv')
+    df_users = pd.read_csv('./data/processed/users.csv')
 
     with np.load(data_path) as file:
         X_users, X_movies = file['X_users'], file['X_movies']
@@ -43,7 +43,7 @@ def data_to_heterograph(data_path: str) -> HeteroData:
 def get_train_csr_matrix(train_ratio: float = 0.8, watched_pct_threshold: int = 50):
     from scipy.sparse import csr_matrix
     
-    df_inter = pd.read_csv('./processed_data/interactions.csv')
+    df_inter = pd.read_csv('./data/processed/interactions.csv')
     train_size = int(train_ratio * len(df_inter))
     df_train = df_inter[:train_size]
 
@@ -68,7 +68,7 @@ def get_train_csr_matrix(train_ratio: float = 0.8, watched_pct_threshold: int = 
     return csr_mat, users_rev_mapping, movies_rev_mapping
 
 def get_test_warm_data(train_ratio=0.8, watch_threshold=1):
-    df_inter = pd.read_csv('./processed_data/interactions.csv')
+    df_inter = pd.read_csv('./data/processed/interactions.csv')
     train_size = int(train_ratio * len(df_inter))
     df_test = df_inter[train_size:]
     train_count = df_inter[:train_size]['user_id'].value_counts().to_dict()

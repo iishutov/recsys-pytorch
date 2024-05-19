@@ -7,17 +7,29 @@ from torch_geometric.data import HeteroData
 from torch_geometric.typing import EdgeType, NodeType
 from torch_geometric.loader import NeighborLoader
 
-class GNNSAGE(torch.nn.Module):
-    def __init__(self, num_layers: int, channels: int, dropout_p: float = None):
+class _GNNSAGE(torch.nn.Module):
+    def __init__(self, num_layers: int, channels: int,
+                 normalize: bool = False, aggr_type: str = 'mean',
+                 dropout_p: float = None):
         super().__init__()
         self.dropout_p = dropout_p
         self.convs = torch.nn.ModuleList()
+
+        kwargs = dict(
+            out_channels=channels, normalize=normalize,
+            aggr = 'max' if aggr_type == 'pool-max' else 'mean'
+        )
+        if aggr_type == 'pool-max':
+            kwargs.update(dict(project=True))
+
+        user_dim, movie_dim = 14, 300
+
         for _ in range(num_layers):
             conv = gnn.HeteroConv({
                 ('user', 'watched', 'movie'):
-                    gnn.SAGEConv((-1, -1), channels),
+                    gnn.SAGEConv(in_channels=(user_dim, movie_dim), **kwargs),
                 ('movie', 'rev_watched', 'user'):
-                    gnn.SAGEConv((-1, -1), channels),
+                    gnn.SAGEConv(in_channels=(movie_dim, user_dim), **kwargs),
             }, aggr='sum')
             self.convs.append(conv)
 
@@ -28,33 +40,38 @@ class GNNSAGE(torch.nn.Module):
         
         for i, conv in enumerate(self.convs):
             x_dict = conv(x_dict, edge_index_dict)
-            if i != len(self.convs):
+            if i != len(self.convs)-1:
                 x_dict = {node_type: F.leaky_relu(x)
                           for node_type, x in x_dict.items()}
                 if self.dropout_p is not None:
                     x_dict = {node_type: F.dropout(x, self.dropout_p, self.training)
                               for node_type, x in x_dict.items()}
-        
         return x_dict
 
-class IPDecoder(torch.nn.Module):
+class _IPDecoder(torch.nn.Module):
     def forward(self,
-                x_dict: Dict[NodeType, torch.Tensor],
+                h_dict: Dict[NodeType, torch.Tensor],
                 edge_label_index: torch.Tensor) \
                     -> torch.Tensor:
         
         users_idx, movies_idx = edge_label_index
-        x_users = x_dict['user'][users_idx]
-        x_movies = x_dict['movie'][movies_idx]
+        h_users = h_dict['user'][users_idx]
+        h_movies = h_dict['movie'][movies_idx]
 
-        return (x_users * x_movies).sum(dim=-1)
+        return (h_users * h_movies).sum(dim=-1)
 
 class GNN(torch.nn.Module):
     def __init__(self, num_layers: int = 3, hidden_channels: int = 64,
-                 dropout_encoder_p=None):
+                 normalize: bool = False, aggr_type: str = 'mean',
+                 dropout_p=None):
         super().__init__()
-        self.encoder = GNNSAGE(num_layers, hidden_channels, dropout_encoder_p)
-        self.decoder = IPDecoder()
+
+        if aggr_type not in {'mean', 'max-pool'}:
+            raise Exception("aggr_type for SAGEConv layer must be 'mean' or 'max-pool'")
+
+        self.encoder = _GNNSAGE(num_layers, hidden_channels,
+                               normalize, aggr_type, dropout_p)
+        self.decoder = _IPDecoder()
 
     def forward(self,
                 x_dict: Dict[NodeType, torch.Tensor],
@@ -76,14 +93,15 @@ class GNN(torch.nn.Module):
 
         return movie_embs
     
-    def recommend(self, users_idx: torch.Tensor, data: HeteroData, top_count: int, k: int,
-                  device: torch.device, faiss_device: torch.device):
+    def recommend(self, users_idx: torch.Tensor, data: HeteroData,
+                  top_count: int, k: int,
+                  model_device: torch.device, faiss_device: torch.device):
         
         from torch_geometric import EdgeIndex
         from torch_geometric.nn import MIPSKNNIndex
 
         num_users, num_movies = data['user'].num_nodes, data['movie'].num_nodes
-        edges = EdgeIndex(data['user', 'movie'].edge_index.contiguous().to(device),
+        edges = EdgeIndex(data['user', 'movie'].edge_index.contiguous().to(model_device),
                           sparse_size=(num_users, num_movies))
         time = data['user', 'movie'].time
 
@@ -98,10 +116,9 @@ class GNN(torch.nn.Module):
             input_time=(time[-1]).repeat(num_movies),
             **loader_kwargs)
 
-        movie_embs = self.get_movies_embeddings(movie_loader, device)
+        movie_embs = self.get_movies_embeddings(movie_loader, model_device)
         movie_embs = torch.cat(movie_embs, dim=0).to(faiss_device)
-        if top_count is not None:
-            movie_embs = movie_embs[:top_count]
+        if top_count is not None: movie_embs = movie_embs[:top_count]
         
         mipsknn = MIPSKNNIndex(movie_embs)
         
@@ -113,7 +130,7 @@ class GNN(torch.nn.Module):
         recs = torch.empty(size=(len(users_idx), k))
         users_infered = 0
         for batch in user_neighbors_loader:
-            batch = batch.to(device)
+            batch = batch.to(model_device)
             batch_size = batch['user'].batch_size
             user_embs = self.encoder(batch.x_dict, batch.edge_index_dict)\
                 ['user'][:batch_size].reshape(batch_size, -1).to(faiss_device)
