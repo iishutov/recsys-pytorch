@@ -27,7 +27,7 @@ class PrepMoviePipeline():
     def __transform_df__(self, df: pd.DataFrame):
         df['age_rating'] = df['age_rating'].fillna(0).astype(int).astype('category')
         df.drop(['title_orig', 'release_year', 'countries', 
-            'for_kids', 'studios', 'directors', 'actors', 'description'],
+            'for_kids', 'studios', 'directors', 'actors'],
             axis=1, inplace=True)
     
     def __transform_X__(self, df: pd.DataFrame,
@@ -71,12 +71,15 @@ class PrepUserPipeline():
         df['kids_flg'] = df['kids_flg'].fillna(0)
         df['age'] = df['age'].fillna('age_25_34')
         df['income'] = df['income'].fillna('income_20_40')
-        df['sex'] = df['sex'].fillna('Ж')
+        df['sex'] = df['sex'].fillna('?')
 
     def __transform_X__(self, df: pd.DataFrame,
         X_age: np.ndarray, X_income: np.ndarray):
 
-        X_sex = (df['sex'] == 'М').astype(int).values.reshape(-1, 1)
+        sex_encoded = df['sex'].apply(
+            lambda sex: 1 if sex == 'М' else 0 if sex == 'Ж' else 0.5)
+        X_sex = sex_encoded.values.reshape(-1, 1)
+        
         X_kids_flag = df['kids_flg'].to_numpy().reshape(-1, 1)
 
         return np.hstack([X_age, X_income, X_sex, X_kids_flag])

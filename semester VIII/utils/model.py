@@ -6,9 +6,30 @@ import torch.nn.functional as F
 from torch_geometric.data import HeteroData
 from torch_geometric.typing import EdgeType, NodeType
 from torch_geometric.loader import NeighborLoader
+from torch.nn.modules.loss import _Loss
+
+class MaxMarginLoss(_Loss):
+    def __init__(self, margin: float, alpha: float,
+                 model: torch.nn.Module, device: torch.device):
+        super().__init__()
+        self.margin = margin
+        self.alpha = alpha
+        self.model = model
+        self.device = device
+
+    def forward(self, positives: torch.Tensor, negatives: torch.Tensor) -> torch.Tensor:
+        z = torch.zeros(len(positives), device=self.device)
+
+        reg = 0
+        if self.alpha != None:
+            for param in self.model.parameters():
+                reg += param.pow(2).sum()
+            reg = self.alpha * reg / len(positives)
+
+        return torch.max(z, -positives + negatives + self.margin).mean() + reg
 
 class _GNNSAGE(torch.nn.Module):
-    def __init__(self, num_layers: int, channels: int,
+    def __init__(self, num_layers: int, user_dim: int, movie_dim: int, channels: int,
                  normalize: bool = False, aggr_type: str = 'mean',
                  dropout_p: float = None):
         super().__init__()
@@ -22,14 +43,14 @@ class _GNNSAGE(torch.nn.Module):
         if aggr_type == 'pool-max':
             kwargs.update(dict(project=True))
 
-        user_dim, movie_dim = 14, 300
-
-        for _ in range(num_layers):
+        for layer_num in range(num_layers):
+            in_channels = (user_dim, movie_dim) if layer_num == 0 \
+                            else (channels, channels)
             conv = gnn.HeteroConv({
                 ('user', 'watched', 'movie'):
-                    gnn.SAGEConv(in_channels=(user_dim, movie_dim), **kwargs),
+                    gnn.SAGEConv(in_channels=in_channels, **kwargs),
                 ('movie', 'rev_watched', 'user'):
-                    gnn.SAGEConv(in_channels=(movie_dim, user_dim), **kwargs),
+                    gnn.SAGEConv(in_channels=in_channels[::-1], **kwargs),
             }, aggr='sum')
             self.convs.append(conv)
 
@@ -61,15 +82,15 @@ class _IPDecoder(torch.nn.Module):
         return (h_users * h_movies).sum(dim=-1)
 
 class GNN(torch.nn.Module):
-    def __init__(self, num_layers: int = 3, hidden_channels: int = 64,
-                 normalize: bool = False, aggr_type: str = 'mean',
-                 dropout_p=None):
+    def __init__(self, num_layers: int, user_dim: int, movie_dim: int,
+                 hidden_channels: int = 64, normalize: bool = False,
+                 aggr_type: str = 'mean', dropout_p=None):
         super().__init__()
 
         if aggr_type not in {'mean', 'max-pool'}:
             raise Exception("aggr_type for SAGEConv layer must be 'mean' or 'max-pool'")
 
-        self.encoder = _GNNSAGE(num_layers, hidden_channels,
+        self.encoder = _GNNSAGE(num_layers, user_dim, movie_dim, hidden_channels,
                                normalize, aggr_type, dropout_p)
         self.decoder = _IPDecoder()
 
@@ -82,7 +103,8 @@ class GNN(torch.nn.Module):
         h_dict = self.encoder(x_dict, edge_index_dict)
         return self.decoder(h_dict, edge_label_index)
     
-    def get_movies_embeddings(self, movie_loader: NeighborLoader, device: torch.device):
+    def get_movies_embeddings(self, movie_loader: NeighborLoader, device: torch.device) \
+            -> list:
         movie_embs = []
         for batch in movie_loader:
             batch = batch.to(device)
@@ -95,7 +117,8 @@ class GNN(torch.nn.Module):
     
     def recommend(self, users_idx: torch.Tensor, data: HeteroData,
                   top_count: int, k: int,
-                  model_device: torch.device, faiss_device: torch.device):
+                  model_device: torch.device, faiss_device: torch.device) \
+                    -> torch.Tensor:
         
         from torch_geometric import EdgeIndex
         from torch_geometric.nn import MIPSKNNIndex
