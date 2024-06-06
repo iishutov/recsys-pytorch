@@ -8,25 +8,27 @@ from torch_geometric.typing import EdgeType, NodeType
 from torch_geometric.loader import NeighborLoader
 from torch.nn.modules.loss import _Loss
 
-class MaxMarginLoss(_Loss):
-    def __init__(self, margin: float, alpha: float,
-                 model: torch.nn.Module, device: torch.device):
+class TripletRankingLoss(_Loss):
+    def __init__(self, margin: float,
+                 alpha: float = None, device: torch.device = torch.device('cpu')):
         super().__init__()
         self.margin = margin
         self.alpha = alpha
-        self.model = model
         self.device = device
 
-    def forward(self, positives: torch.Tensor, negatives: torch.Tensor) -> torch.Tensor:
+    def forward(self, positives: torch.Tensor, negatives: torch.Tensor,
+                params: torch.nn.Module.parameters = None) -> torch.Tensor:
+        
         z = torch.zeros(len(positives), device=self.device)
+        trl = torch.max(z, -positives + negatives + self.margin).mean()
 
         reg = 0
         if self.alpha != None:
-            for param in self.model.parameters():
+            for param in params:
                 reg += param.pow(2).sum()
             reg = self.alpha * reg / len(positives)
 
-        return torch.max(z, -positives + negatives + self.margin).mean() + reg
+        return trl + reg
 
 class _GNNSAGE(torch.nn.Module):
     def __init__(self, num_layers: int, user_dim: int, movie_dim: int, channels: int,
@@ -116,8 +118,9 @@ class GNN(torch.nn.Module):
         return movie_embs
     
     def recommend(self, users_idx: torch.Tensor, data: HeteroData,
-                  top_count: int, k: int,
-                  model_device: torch.device, faiss_device: torch.device) \
+                  top_count: int, k: int, batch_size: int = 1024,
+                  model_device: torch.device = torch.device('cpu'),
+                  faiss_device: torch.device = torch.device('cpu')) \
                     -> torch.Tensor:
         
         from torch_geometric import EdgeIndex
@@ -129,13 +132,13 @@ class GNN(torch.nn.Module):
         time = data['user', 'movie'].time
 
         loader_kwargs = dict(
-            data=data, batch_size=1024,
+            data=data,
             num_neighbors=[5, 5, 5],
             time_attr='time', temporal_strategy='last',
             num_workers=4)
 
         movie_loader = NeighborLoader(
-            input_nodes='movie',
+            input_nodes='movie', batch_size=1024,
             input_time=(time[-1]).repeat(num_movies),
             **loader_kwargs)
 
@@ -146,7 +149,7 @@ class GNN(torch.nn.Module):
         mipsknn = MIPSKNNIndex(movie_embs)
         
         user_neighbors_loader = NeighborLoader(
-            input_nodes=('user', users_idx),
+            input_nodes=('user', users_idx), batch_size=batch_size,
             input_time=(time[-1]).repeat(num_users),
             **loader_kwargs)
         
