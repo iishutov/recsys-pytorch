@@ -1,5 +1,7 @@
 __pycache__
 
 overview/data/
-semester VIII/data/
+semester VIII/data/*
 semester VIII/model_saves/
+
+!semester VIII/data/posters/
